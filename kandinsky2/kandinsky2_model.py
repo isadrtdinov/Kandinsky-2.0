@@ -407,7 +407,7 @@ class Kandinsky2:
             return image
 
         model_kwargs = {}
-        text_embeds = self.encode_prompts(prompts, batch_size)
+        text_embeds = self.encode_prompts(prompts, 1)
 
         samples_list = [pil_img]
         if inter_alphas is None:
