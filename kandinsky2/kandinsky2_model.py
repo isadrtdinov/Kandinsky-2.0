@@ -197,25 +197,7 @@ class Kandinsky2:
                                  h=h, w=w, sampler=sampler, ddim_eta=ddim_eta)
 
     @torch.no_grad()
-    def generate_prompt_interpolation(self, prompts, num_alphas=21,
-                     batch_size=1, diffusion=None,
-                     guidance_scale=7, progress=True, dynamic_threshold_v=99.5,
-                     denoised_type='dynamic_threshold', init_step=None, noise=None,
-                     init_img=None, img_mask=None, h=512, w=512, sampler='ddim_sampler', ddim_eta=0.8,
-                     ):
-        new_h, new_w = self.get_new_h_w(h, w)
-        full_batch_size = batch_size * 2
-        model_kwargs = {}
-        if noise is None:
-            noise = torch.randn(full_batch_size, 4, new_h, new_w, device=self.device)
-        if self.use_fp16:
-            noise = noise.half()
-
-        if init_img is not None and self.use_fp16:
-            init_img = init_img.half()
-        if img_mask is not None and self.use_fp16:
-            img_mask = img_mask.half()
-
+    def encode_prompts(self, prompts, batch_size):
         assert isinstance(prompts, (tuple, list)) and len(prompts) == 2
         text_embeds = [{}, {}]
 
@@ -230,6 +212,20 @@ class Kandinsky2:
                 tokenizer=self.tokenizer2,
                 prompt=prompt,
                 batch_size=batch_size)
+
+        return text_embeds
+
+    @torch.no_grad
+    def generate_img_encoded_prompt(self, model_kwargs, batch_size=1, diffusion=None,
+                                    guidance_scale=7, progress=True, dynamic_threshold_v=99.5,
+                                    denoised_type='dynamic_threshold', init_step=None, noise=None,
+                                    init_img=None, img_mask=None, h=512, w=512, sampler='ddim_sampler', ddim_eta=0.8):
+        new_h, new_w = self.get_new_h_w(h, w)
+        full_batch_size = batch_size * 2
+        if init_img is not None and self.use_fp16:
+            init_img = init_img.half()
+        if img_mask is not None and self.use_fp16:
+            img_mask = img_mask.half()
 
         if self.task_type == 'inpainting':
             init_img = init_img.to(self.device)
@@ -268,8 +264,63 @@ class Kandinsky2:
         else:
             denoised_function = None
 
+        self.model.del_cache()
+        if sampler == 'p_sampler':
+            samples = diffusion.p_sample_loop(
+                model_fn,
+                (full_batch_size, 4, new_h, new_w),
+                device=self.device,
+                denoised_type=denoised_type,
+                dynamic_threshold_v=dynamic_threshold_v,
+                noise=noise,
+                progress=progress,
+                model_kwargs=model_kwargs,
+                init_step=init_step,
+                denoised_fn=denoised_function,
+            )[:batch_size]
+        elif sampler == 'ddim_sampler':
+            samples = diffusion.ddim_sample_loop(
+                model_fn,
+                (full_batch_size, 4, new_h, new_w),
+                device=self.device,
+                denoised_type=denoised_type,
+                dynamic_threshold_v=dynamic_threshold_v,
+                noise=noise,
+                progress=progress,
+                model_kwargs=model_kwargs,
+                init_step=init_step,
+                denoised_fn=denoised_function,
+                eta=ddim_eta
+            )[:batch_size]
+        else:
+            raise ValueError('Only p_sampler and ddim_sampler is available')
+        self.model.del_cache()
+        if self.use_image_enc:
+            if self.use_fp16:
+                samples = samples.half()
+            samples = self.image_encoder.decode(samples / self.scale)
+        samples = samples[:, :, :h, :w]
+        return process_images(samples)
+
+    @torch.no_grad()
+    def generate_prompt_interpolation(self, prompts, inter_alphas=None,
+                     batch_size=1, diffusion=None,
+                     guidance_scale=7, progress=True, dynamic_threshold_v=99.5,
+                     denoised_type='dynamic_threshold', init_step=None, noise=None,
+                     init_img=None, img_mask=None, h=512, w=512, sampler='ddim_sampler', ddim_eta=0.8,
+                     ):
+        new_h, new_w = self.get_new_h_w(h, w)
+        full_batch_size = batch_size * 2
+        model_kwargs = {}
+        if noise is None:
+            noise = torch.randn(full_batch_size, 4, new_h, new_w, device=self.device)
+        if self.use_fp16:
+            noise = noise.half()
+
+        text_embeds = self.encode_prompts(prompts, batch_size)
+
         samples_list = []
-        for alpha in np.linspace(0, 1, num_alphas):
+        for alpha in inter_alphas:
             self.model.del_cache()
 
             for key in text_embeds[0].keys():
@@ -278,58 +329,26 @@ class Kandinsky2:
                 else:
                     model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
 
-            if sampler == 'p_sampler':
-                samples = diffusion.p_sample_loop(
-                    model_fn,
-                    (full_batch_size, 4, new_h, new_w),
-                    device=self.device,
-                    denoised_type=denoised_type,
-                    dynamic_threshold_v=dynamic_threshold_v,
-                    noise=noise,
-                    progress=progress,
-                    model_kwargs=model_kwargs,
-                    init_step=init_step,
-                    denoised_fn=denoised_function,
-                )[:batch_size]
+                samples_list += self.generate_img_encoded_prompt(
+                    model_kwargs, batch_size, diffusion,
+                    guidance_scale, progress, dynamic_threshold_v,
+                    denoised_type, init_step, noise,
+                    init_img, img_mask, new_h, new_w, sampler, ddim_eta
+                )
 
-            elif sampler == 'ddim_sampler':
-                samples = diffusion.ddim_sample_loop(
-                    model_fn,
-                    (full_batch_size, 4, new_h, new_w),
-                    device=self.device,
-                    denoised_type=denoised_type,
-                    dynamic_threshold_v=dynamic_threshold_v,
-                    noise=noise,
-                    progress=progress,
-                    model_kwargs=model_kwargs,
-                    init_step=init_step,
-                    denoised_fn=denoised_function,
-                    eta=ddim_eta
-                )[:batch_size]
-            else:
-                raise ValueError('Only p_sampler and ddim_sampler is available')
-
-            self.model.del_cache()
-            if self.use_image_enc:
-                if self.use_fp16:
-                    samples = samples.half()
-                samples = self.image_encoder.decode(samples / self.scale)
-            samples = samples[:, :, :h, :w]
-
-            samples_list += [samples]
-        return [process_images(samples) for samples in samples_list]
+        return samples_list
 
     @torch.no_grad()
-    def generate_text2img_transition(self, prompts, num_alphas=21, num_steps=100,
-                          batch_size=1, guidance_scale=7, progress=True,
-                          dynamic_threshold_v=99.5, denoised_type='dynamic_threshold', h=512, w=512
-                          , sampler='ddim_sampler', ddim_eta=0.05):
+    def generate_text2img_transition(self, prompts, inter_alphas=None, num_steps=100,
+                                     batch_size=1, guidance_scale=7, progress=True,
+                                     dynamic_threshold_v=99.5, denoised_type='dynamic_threshold', h=512, w=512,
+                                     sampler='ddim_sampler', ddim_eta=0.05):
         config = deepcopy(self.config)
         config['diffusion_config']['timestep_respacing'] = str(num_steps)
         if sampler == 'ddim_sampler':
             config['diffusion_config']['timestep_respacing'] = 'ddim' + config['diffusion_config']['timestep_respacing']
         diffusion = create_gaussian_diffusion(**config['diffusion_config'])
-        return self.generate_prompt_interpolation(prompts=prompts, num_alphas=num_alphas,
+        return self.generate_prompt_interpolation(prompts=prompts, inter_alphas=inter_alphas,
                                                   batch_size=batch_size, diffusion=diffusion,
                                                   guidance_scale=guidance_scale, progress=progress,
                                                   dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
@@ -360,6 +379,52 @@ class Kandinsky2:
                                  guidance_scale=guidance_scale, progress=progress,
                                  dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
                                  init_step=start_step, sampler=sampler, ddim_eta=ddim_eta)
+
+    @torch.no_grad()
+    def generate_img2img_transition(self, prompts, pil_img, inter_alphas=None, strength=0.7,
+                                    num_steps=100, guidance_scale=7, progress=True,
+                                    dynamic_threshold_v=99.5, denoised_type='dynamic_threshold',
+                                    sampler='ddim_sampler', ddim_eta=0.05):
+        config = deepcopy(self.config)
+        config['diffusion_config']['timestep_respacing'] = str(num_steps)
+        if sampler == 'ddim_sampler':
+            config['diffusion_config']['timestep_respacing'] = 'ddim' + config['diffusion_config']['timestep_respacing']
+        diffusion = create_gaussian_diffusion(**config['diffusion_config'])
+        start_step = int(diffusion.num_timesteps * (1 - strength))
+
+        def encode_image(pil_img):
+            image = prepare_image(pil_img).to(self.device)
+            if self.use_fp16:
+                image = image.half()
+            image = self.image_encoder.encode(image).sample() * self.scale
+            image = q_sample(image, torch.tensor(diffusion.timestep_map[start_step - 1]).to(self.device),
+                             schedule_name=config['diffusion_config']['noise_schedule'],
+                             num_steps=config['diffusion_config']['steps'])
+            image = image.repeat(2, 1, 1, 1)
+            return image
+
+        model_kwargs = {}
+        text_embeds = self.encode_prompts(prompts, batch_size)
+
+        samples_list = [pil_img]
+        for alpha in inter_alphas:
+            self.model.del_cache()
+
+            for key in text_embeds[0].keys():
+                if text_embeds[0][key] is None or text_embeds[1][key] is None:
+                    model_kwargs[key] = None
+                else:
+                    model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
+
+            samples_list += self.generate_img_encoded_prompt(
+                model_kwargs=model_kwargs, batch_size=1,
+                diffusion=diffusion, noise=encode_image(samples_list[-1]),
+                guidance_scale=guidance_scale, progress=progress,
+                dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
+                init_step=start_step, sampler=sampler, ddim_eta=ddim_eta
+            )
+
+        return samples_list
 
     @torch.no_grad()
     def generate_inpainting(self, prompt, pil_img, img_mask,

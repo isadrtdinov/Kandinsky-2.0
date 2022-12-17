@@ -79,7 +79,6 @@ class VQModel(pl.LightningModule):
         return dec, diff
 
 
-
 class VQModelInterface(VQModel):
     def __init__(self, embed_dim, *args, **kwargs):
         super().__init__(embed_dim=embed_dim, *args, **kwargs)
