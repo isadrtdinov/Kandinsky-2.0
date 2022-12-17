@@ -215,7 +215,7 @@ class Kandinsky2:
 
         return text_embeds
 
-    @torch.no_grad
+    @torch.no_grad()
     def generate_img_encoded_prompt(self, model_kwargs, batch_size=1, diffusion=None,
                                     guidance_scale=7, progress=True, dynamic_threshold_v=99.5,
                                     denoised_type='dynamic_threshold', init_step=None, noise=None,
@@ -320,6 +320,9 @@ class Kandinsky2:
         text_embeds = self.encode_prompts(prompts, batch_size)
 
         samples_list = []
+        if inter_alphas is None:
+            inter_alphas = np.linspace(0, 1, 21)
+
         for alpha in inter_alphas:
             self.model.del_cache()
 
@@ -407,6 +410,9 @@ class Kandinsky2:
         text_embeds = self.encode_prompts(prompts, batch_size)
 
         samples_list = [pil_img]
+        if inter_alphas is None:
+            inter_alphas = np.linspace(0.05, 1, 21)
+
         for alpha in inter_alphas:
             self.model.del_cache()
 
