@@ -316,7 +316,7 @@ class Kandinsky2:
                 samples = self.image_encoder.decode(samples / self.scale)
             samples = samples[:, :, :h, :w]
 
-            samples_list += [samples.cpu()]
+            samples_list += [samples]
         return [process_images(samples) for samples in samples_list]
 
     @torch.no_grad()
