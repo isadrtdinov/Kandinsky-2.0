@@ -317,6 +317,22 @@ class Kandinsky2:
         return [process_images(samples) for samples in samples_list]
 
     @torch.no_grad()
+    def generate_text2img_transition(self, prompts, num_alphas=21, num_steps=100,
+                          batch_size=1, guidance_scale=7, progress=True,
+                          dynamic_threshold_v=99.5, denoised_type='dynamic_threshold', h=512, w=512
+                          , sampler='ddim_sampler', ddim_eta=0.05):
+        config = deepcopy(self.config)
+        config['diffusion_config']['timestep_respacing'] = str(num_steps)
+        if sampler == 'ddim_sampler':
+            config['diffusion_config']['timestep_respacing'] = 'ddim' + config['diffusion_config']['timestep_respacing']
+        diffusion = create_gaussian_diffusion(**config['diffusion_config'])
+        return self.generate_prompt_interpolation(prompts=prompts, num_alphas=num_alphas,
+                                                  batch_size=batch_size, diffusion=diffusion,
+                                                  guidance_scale=guidance_scale, progress=progress,
+                                                  dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
+                                                  h=h, w=w, sampler=sampler, ddim_eta=ddim_eta)
+
+    @torch.no_grad()
     def generate_img2img(self, prompt, pil_img, strength=0.7,
                          num_steps=100, guidance_scale=7, progress=True,
                          dynamic_threshold_v=99.5, denoised_type='dynamic_threshold'
