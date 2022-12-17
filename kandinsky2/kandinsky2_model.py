@@ -273,7 +273,10 @@ class Kandinsky2:
             self.model.del_cache()
 
             for key in text_embeds[0].keys():
-                model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
+                if text_embeds[0][key] is None or text_embeds[1][key] is None:
+                    model_kwargs[key] = None
+                else:
+                    model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
 
             if sampler == 'p_sampler':
                 samples = diffusion.p_sample_loop(
