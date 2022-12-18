@@ -323,6 +323,10 @@ class Kandinsky2:
         if inter_alphas is None:
             inter_alphas = np.linspace(0, 1, 21)
 
+        if progress:
+            from tqdm.auto import tqdm
+            inter_alphas = tqdm(inter_alphas)
+
         for alpha in inter_alphas:
             self.model.del_cache()
 
@@ -333,10 +337,11 @@ class Kandinsky2:
                     model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
 
                 samples_list += self.generate_img_encoded_prompt(
-                    model_kwargs, batch_size, diffusion,
-                    guidance_scale, progress, dynamic_threshold_v,
-                    denoised_type, init_step, noise,
-                    init_img, img_mask, new_h, new_w, sampler, ddim_eta
+                    model_kwargs=model_kwargs, batch_size=batch_size, diffusion=diffusion,
+                    guidance_scale=guidance_scale, progress=False, dynamic_threshold_v=dynamic_threshold_v,
+                    denoised_type=denoised_type, init_step=init_step, noise=noise,
+                    init_img=init_img, img_mask=img_mask, new_h=new_h, new_w=new_w,
+                    sampler=sampler, ddim_eta=ddim_eta
                 )
 
         return samples_list
@@ -384,8 +389,8 @@ class Kandinsky2:
                                  init_step=start_step, sampler=sampler, ddim_eta=ddim_eta)
 
     @torch.no_grad()
-    def generate_img2img_transition(self, prompts, pil_imgs, inter_alphas=None, strength=0.7,
-                                    num_steps=100, guidance_scale=7, progress=True,
+    def generate_img2img_transition(self, prompts, pil_imgs, inter_alphas=None, noise_perturbation=0,
+                                    strength=0.7, num_steps=100, guidance_scale=7, progress=True,
                                     dynamic_threshold_v=99.5, denoised_type='dynamic_threshold',
                                     sampler='ddim_sampler', ddim_eta=0.05):
         config = deepcopy(self.config)
@@ -414,6 +419,10 @@ class Kandinsky2:
         if inter_alphas is None:
             inter_alphas = np.linspace(0.05, 0.95, 19)
 
+        if progress:
+            from tqdm.auto import tqdm
+            inter_alphas = tqdm(inter_alphas)
+
         for alpha in inter_alphas:
             self.model.del_cache()
 
@@ -424,10 +433,14 @@ class Kandinsky2:
                     model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
 
             noise = np.sqrt(1 - alpha) * encoded_images[0] + np.sqrt(alpha) * encoded_images[1]
+            if noise_perturbation > 0:
+                eps = torch.randn_like(noise)
+                noise = np.sqrt(1 - noise_perturbation) * noise + np.sqrt(noise_perturbation) * eps
+
             samples_list += self.generate_img_encoded_prompt(
                 model_kwargs=model_kwargs, batch_size=1,
                 diffusion=diffusion, noise=noise,
-                guidance_scale=guidance_scale, progress=progress,
+                guidance_scale=guidance_scale, progress=False,
                 dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
                 init_step=start_step, sampler=sampler, ddim_eta=ddim_eta
             )
