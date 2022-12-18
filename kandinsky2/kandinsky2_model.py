@@ -384,7 +384,7 @@ class Kandinsky2:
                                  init_step=start_step, sampler=sampler, ddim_eta=ddim_eta)
 
     @torch.no_grad()
-    def generate_img2img_transition(self, prompts, pil_img, inter_alphas=None, strength=0.7,
+    def generate_img2img_transition(self, prompts, pil_imgs, inter_alphas=None, strength=0.7,
                                     num_steps=100, guidance_scale=7, progress=True,
                                     dynamic_threshold_v=99.5, denoised_type='dynamic_threshold',
                                     sampler='ddim_sampler', ddim_eta=0.05):
@@ -408,10 +408,11 @@ class Kandinsky2:
 
         model_kwargs = {}
         text_embeds = self.encode_prompts(prompts, 1)
+        encoded_images = [encode_image(pil_img) for pil_img in pil_imgs]
 
-        samples_list = [pil_img]
+        samples_list = [pil_imgs[0]]
         if inter_alphas is None:
-            inter_alphas = np.linspace(0.05, 1, 21)
+            inter_alphas = np.linspace(0.05, 0.95, 19)
 
         for alpha in inter_alphas:
             self.model.del_cache()
@@ -422,14 +423,16 @@ class Kandinsky2:
                 else:
                     model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
 
+            noise = np.sqrt(1 - alpha) * encoded_images[0] + np.sqrt(alpha) * encoded_images[1]
             samples_list += self.generate_img_encoded_prompt(
                 model_kwargs=model_kwargs, batch_size=1,
-                diffusion=diffusion, noise=encode_image(samples_list[-1]),
+                diffusion=diffusion, noise=noise,
                 guidance_scale=guidance_scale, progress=progress,
                 dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
                 init_step=start_step, sampler=sampler, ddim_eta=ddim_eta
             )
 
+        samples_list += [pil_imgs[1]]
         return samples_list
 
     @torch.no_grad()
