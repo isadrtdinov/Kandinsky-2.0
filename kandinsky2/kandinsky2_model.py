@@ -418,7 +418,8 @@ class Kandinsky2:
         embeds_eps = {}
         if prompt_perturbation > 0:
             for key, embed in text_embeds[0].items():
-                embeds_eps[key] = torch.randn_like(embed)
+                if embed is not None:
+                    embeds_eps[key] = torch.randn_like(embed)
 
         samples_list = []
         if inter_alphas is None:
