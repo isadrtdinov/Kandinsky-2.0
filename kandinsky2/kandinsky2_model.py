@@ -417,7 +417,7 @@ class Kandinsky2:
         encoded_images = [encode_image(pil_img) for pil_img in pil_imgs]
         embeds_eps = {}
         if prompt_perturbation > 0:
-            for key, embed in text_embeds[0].values():
+            for key, embed in text_embeds[0].items():
                 embeds_eps[key] = torch.randn_like(embed)
 
         samples_list = []
