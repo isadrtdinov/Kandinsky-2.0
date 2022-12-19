@@ -389,7 +389,8 @@ class Kandinsky2:
                                  init_step=start_step, sampler=sampler, ddim_eta=ddim_eta)
 
     @torch.no_grad()
-    def generate_img2img_transition(self, prompts, pil_imgs, inter_alphas=None, noise_perturbation=0,
+    def generate_img2img_transition(self, prompts, pil_imgs, inter_alphas=None,
+                                    noise_perturbation=0, prompt_perturbation=0,
                                     strength=0.7, num_steps=100, guidance_scale=7, progress=True,
                                     dynamic_threshold_v=99.5, denoised_type='dynamic_threshold',
                                     sampler='ddim_sampler', ddim_eta=0.05):
@@ -414,10 +415,14 @@ class Kandinsky2:
         model_kwargs = {}
         text_embeds = self.encode_prompts(prompts, 1)
         encoded_images = [encode_image(pil_img) for pil_img in pil_imgs]
+        embeds_eps = {}
+        if prompt_perturbation > 0:
+            for key, embed in text_embeds[0].values():
+                embeds_eps[key] = torch.randn_like(embed)
 
-        samples_list = [pil_imgs[0]]
+        samples_list = []
         if inter_alphas is None:
-            inter_alphas = np.linspace(0.05, 0.95, 19)
+            inter_alphas = np.linspace(0, 1, 100)
 
         if progress:
             from tqdm.auto import tqdm
@@ -431,6 +436,9 @@ class Kandinsky2:
                     model_kwargs[key] = None
                 else:
                     model_kwargs[key] = (1 - alpha) * text_embeds[0][key] + alpha * text_embeds[1][key]
+                    if prompt_perturbation > 0:
+                        beta = prompt_perturbation * (1 - 2 * np.abs(alpha - 0.5))
+                        model_kwargs[key] = (1 - beta) * model_kwargs[key] + beta * embeds_eps[key]
 
             noise = np.sqrt(1 - alpha) * encoded_images[0] + np.sqrt(alpha) * encoded_images[1]
             if noise_perturbation > 0:
@@ -445,7 +453,7 @@ class Kandinsky2:
                 init_step=start_step, sampler=sampler, ddim_eta=ddim_eta
             )
 
-        samples_list += [pil_imgs[1]]
+        samples_list += []
         return samples_list
 
     @torch.no_grad()
