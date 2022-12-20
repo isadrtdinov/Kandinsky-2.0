@@ -198,8 +198,8 @@ class Kandinsky2:
 
     @torch.no_grad()
     def encode_prompts(self, prompts, batch_size):
-        assert isinstance(prompts, (tuple, list)) and len(prompts) == 2
-        text_embeds = [{}, {}]
+        assert isinstance(prompts, (tuple, list))
+        text_embeds = [{} for _ in range(len(prompts))]
 
         for i, prompt in enumerate(prompts):
             text_embeds[i]['full_emb1'], text_embeds[i]['pooled_emb1'] = self.encode_text(
@@ -454,8 +454,114 @@ class Kandinsky2:
                 init_step=start_step, sampler=sampler, ddim_eta=ddim_eta
             )
 
-        samples_list += []
         return samples_list
+
+    @torch.no_grad()
+    def generate_img2img_flow(self, scenario,
+                              strength=0.7, num_steps=100, guidance_scale=7, progress=True,
+                              dynamic_threshold_v=99.5, denoised_type='dynamic_threshold',
+                              sampler='ddim_sampler', ddim_eta=0.05):
+        config = deepcopy(self.config)
+        config['diffusion_config']['timestep_respacing'] = str(num_steps)
+        if sampler == 'ddim_sampler':
+            config['diffusion_config']['timestep_respacing'] = 'ddim' + config['diffusion_config']['timestep_respacing']
+        diffusion = create_gaussian_diffusion(**config['diffusion_config'])
+        start_step = int(diffusion.num_timesteps * (1 - strength))
+
+        def encode_image(pil_img):
+            image = prepare_image(pil_img).to(self.device)
+            if self.use_fp16:
+                image = image.half()
+            image = self.image_encoder.encode(image).sample() * self.scale
+            image = q_sample(image, torch.tensor(diffusion.timestep_map[start_step - 1]).to(self.device),
+                             schedule_name=config['diffusion_config']['noise_schedule'],
+                             num_steps=config['diffusion_config']['steps'])
+            image = image.repeat(2, 1, 1, 1)
+            return image
+
+        current_noise, next_noise = None, None
+        current_embed, next_embed = None, None
+        frame_images = []
+
+        pbar = None
+        if progress:
+            from tqdm.auto import tqdm
+            pbar = tqdm(total=scenario[-1]['frame'] + 1)
+
+        for i in range(len(scenario) - 1):
+            current_segment, next_segment = scenario[i], scenario[i + 1]
+            if current_noise is None:
+                current_noise = encode_image(current_segment['image'])
+                current_embed, next_embed = self.encode_prompts(
+                    (current_segment['prompt'], next_segment['prompt']), 1
+                )
+            else:
+                current_noise = next_noise
+                current_embed = next_embed
+                next_embed = self.encode_prompts((next_segment['prompt'], ), 1)[0]
+            next_noise = encode_image(next_segment['image'])
+
+            model_kwargs = {}
+            noise_interval = 0
+            embed_eps = []
+            peaks = current_segment.get('perturbation_peaks', [])
+            if peaks:
+                embed_eps = [{} for _ in range(len(peaks))]
+                for key, embed in current_embed.items():
+                    if embed is not None:
+                        for j in range(len(embed_eps)):
+                            embed_eps[j][key] = torch.randn_like(embed)
+
+            frames = range(current_segment['frame'], next_segment['frame'] + 1) if i == 0 else \
+                range(current_segment['frame'] + 1, next_segment['frame'] + 1)
+
+            for frame in frames:
+                self.model.del_cache()
+
+                alpha = (frame - current_segment['frame']) / (next_segment['frame'] - current_segment['frame'])
+                for key in current_embed.keys():
+                    if current_embed[key] is None or next_embed[key] is None:
+                        model_kwargs[key] = None
+                    else:
+                        model_kwargs[key] = (1 - alpha) * current_embed[key] + alpha * next_embed[key]
+                        if peaks:
+                            if noise_interval == 0:
+                                pos = (frame - current_segment['frame']) / \
+                                      (peaks[0] - current_segment['frame'])
+                                beta = current_segment['prompt_perturbation'] * pos
+                                eps = embed_eps[0][key]
+
+                            elif noise_interval == len(embed_eps):
+                                pos = (next_segment['frame'] - frame) / \
+                                      (next_segment['frame'] - peaks[-1])
+                                beta = current_segment['prompt_perturbation'] * pos
+                                eps = embed_eps[-1][key]
+
+                            else:
+                                beta = current_segment['prompt_perturbation']
+                                gamma = (frame - peaks[noise_interval - 1]) / \
+                                        (peaks[noise_interval] - peaks[noise_interval - 1])
+                                eps = (1 - gamma) * embed_eps[noise_interval - 1][key] + \
+                                    gamma * embed_eps[noise_interval][key]
+
+                            if noise_interval < len(peaks) and frame == peaks[noise_interval]:
+                                noise_interval += 1
+                            model_kwargs[key] = (1 - beta) * model_kwargs[key] + beta * eps
+
+                noise = np.sqrt(1 - alpha) * current_noise + np.sqrt(alpha) * next_noise
+                frame_images += self.generate_img_encoded_prompt(
+                    model_kwargs=model_kwargs, batch_size=1,
+                    diffusion=diffusion, noise=noise,
+                    guidance_scale=guidance_scale, progress=False,
+                    dynamic_threshold_v=dynamic_threshold_v, denoised_type=denoised_type,
+                    init_step=start_step, sampler=sampler, ddim_eta=ddim_eta
+                )
+                if pbar is not None:
+                    pbar.update(1)
+
+        if pbar is not None:
+            pbar.close()
+        return frame_images
 
     @torch.no_grad()
     def generate_inpainting(self, prompt, pil_img, img_mask,
