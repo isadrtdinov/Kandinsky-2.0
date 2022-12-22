@@ -1,7 +1,6 @@
 from .model.model_creation import create_model, create_gaussian_diffusion
 from transformers import AutoTokenizer
 from PIL import Image
-import cv2
 import torch
 from omegaconf import OmegaConf
 import math
